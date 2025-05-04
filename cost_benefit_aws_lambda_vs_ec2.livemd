@@ -1,0 +1,411 @@
+<!-- livebook:{"persist_outputs":true} -->
+
+# Cost-Benefit AWS Lambda vs EC2
+
+```elixir
+# Setup
+Mix.install([
+  {:vega_lite, "~> 0.1.6"},
+  {:kino_vega_lite, "~> 0.1.11"}
+])
+```
+
+## Overview
+
+At some point of time you will find yourself asking the question: When should I stop using a serverless compute service and start thinking about a virtual machine in the cloud? - I am using AWS services as example because are the ones I have more familiarity with.
+
+This is our scenario (assumptions):
+
+* We have a system that is constantly executing jobs on daily basis. A Job can be a simple calculation (a+b), database query, http request, training your AI model, processing payments - you name it.
+* The jobs are critical and cannot be interrupted.
+* We don't know how long each job in average takes to complete.
+* The company is planning to keep the system up and running for less than a year.
+
+The goal is to know which service brings us the best cost-benefit depending on the computation load of our system.
+
+To calculate the cost-benefit we can start by asking the question: How many jobs can the cheapest EC2 instance handle compared to the cost of running the same number of jobs in a Lambda?
+
+Let's break this down.
+
+## 1. Setup
+
+### Average Job Duration
+
+Based on our assumptions we don't know how long in average each job takes to complete we must define our lower and upper bounds.
+
+Arbitrarily, I will choose `1 ms/job` as lower bound. However, the upper bound must be `900,000 ms/job` (15 minutes) which is the maximum [Lambda timeout](https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html) meaning that a lambda cannot run jobs longer than 15 minutes.
+
+```elixir
+average_job_durations_ms = 1..900_000
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+1..900000
+```
+
+### EC2 Setup
+
+#### Settings
+
+Region: `us-east-1`, Contract: `on-demand`, Instance Name: `t4g.nano`, Instance Type: `General Purpose`, Operating System: `linux`, Memory: `0.5gb`, vCPU: `2`.
+
+[Price](https://aws.amazon.com/ec2/pricing/on-demand/): on-demand hourly: `0.0042 $/hour`.
+
+#### Cost Calculation
+
+Based on our assumptions the EC2 instance need to keep running 24/7 for less than a year, and the jobs are critical. Choosing an on-demand instance is a great start. Now, the monthly cost can be easily calculated using AWS pricing data with the following formula: `monthly_cost = price_per_hour * hours_per_day * days_per_month`.
+
+```elixir
+defmodule EC2 do
+  def settings do
+    %{
+      memory_gb: 0.5,
+      v_cpu: 2,
+      hourly_price: 0.0042
+    }
+  end
+
+  def get_monthly_cost() do
+    ec2_settings = settings()
+    hours_day = 24
+    days_month = 30
+    
+    Float.round(ec2_settings.hourly_price * hours_day * days_month, 2)
+  end
+end
+
+EC2.settings()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{memory_gb: 0.5, v_cpu: 2, hourly_price: 0.0042}
+```
+
+#### Lambda Setup
+
+#### Setup
+
+Region: `us-east-1`, Architecture: `x86`, Memory: `128 mb`, Ephemeral Storage: `512 mb`.
+
+[Price](https://aws.amazon.com/lambda/pricing/): request price: `0.0000002 request`, execution price: `0.0000166667 gb/second`.
+
+Where the request price is the number of jobs you request a lambda to execute and the execution price is the time it takes to complete the job.
+
+#### Cost Calculation
+
+Assuming that cold starts do not impact performance and that jobs nearing the timeout limit complete without unexpected interruptions, the function `calculate_monthly_costs()` estimates the total monthly cost of running an AWS Lambda function. This calculation is based on two key inputs:
+
+* The total number of job executions per month.
+* The average execution time per job.
+
+The function follows the same pricing model as outlined in the [Lambda Cost Calculator](https://calculator.aws/#/createCalculator/Lambda), taking into account compute time, request count, and ephemeral storage if applicable.
+
+```elixir
+defmodule Lambda do
+  @type average_job_duration_ms :: integer()
+  @type requests :: integer()
+  @type cost :: float()
+  @type cost_scenario :: {average_job_duration_ms, requests, cost}
+
+  def settings do
+    %{
+      memory_mb: 128,
+      ephemeral_storage_mb: 512,
+      execution_price_gb_sec: 0.0000166667,
+      request_price: 0.0000002,
+      ephemeral_storage_price_gb: 0.0000000309,
+    }
+  end
+
+  @spec calculate_monthly_costs(requests_month :: integer(), avg_request_duration_ms :: integer()) :: cost_scenario()
+  def calculate_monthly_costs(requests_month, avg_request_duration_ms) do
+    # Unit conversions
+    mb_to_gb = 0.0009765625
+    ms_to_s = 0.001
+
+    # Free tiering
+    free_compute_tier_gb_s = 400000
+    free_request_tier = 1000000
+    free_ephemeral_storage_tier_gb = 0.5
+
+    # Lambda settings
+    lambda_settings = settings()
+
+    # Compute price calculations
+    memory_allocated = lambda_settings.memory_mb * mb_to_gb
+    total_compute_s = requests_month * avg_request_duration_ms * ms_to_s
+    billable_compute = max(memory_allocated * total_compute_s - free_compute_tier_gb_s, 0)
+    compute_cost = billable_compute * lambda_settings.execution_price_gb_sec
+
+    # Request price calculations
+    billable_requests = max(requests_month - free_request_tier, 0)
+    request_cost = billable_requests * lambda_settings.request_price
+
+    # Ephemeral storage calculations
+    ephemeral_storage_allocated = lambda_settings.ephemeral_storage_mb * mb_to_gb
+    billable_ephemeral_storage = max(ephemeral_storage_allocated - free_ephemeral_storage_tier_gb, 0)
+    ephemeral_storage_cost = billable_ephemeral_storage * total_compute_s * lambda_settings.ephemeral_storage_price_gb
+
+    # Total cost
+    total_cost = compute_cost + request_cost + ephemeral_storage_cost
+    Float.round(total_cost, 2)
+  end
+end
+
+Lambda.settings()
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+%{
+  memory_mb: 128,
+  ephemeral_storage_mb: 512,
+  execution_price_gb_sec: 1.66667e-5,
+  request_price: 2.0e-7,
+  ephemeral_storage_price_gb: 3.09e-8
+}
+```
+
+## 2. Cost Calculations
+
+To calculate EC2 and Lambda costs we will use different scenarios.
+
+A scenario represents a single possible configuration of a workload’s behavior and its associated cost. Specifically, it defines:
+
+The cost of executing a given number of jobs, where each job takes a certain average time to complete. Each scenario is encapsulated as a map in the form:
+
+`%{
+  average_job_duration_ms: ajd_ms,
+  jobs_month: jobs_month,
+  cost: monthly_cost
+}`.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### EC2 Cost
+
+```elixir
+alias VegaLite, as: Vl
+
+ms_month = :timer.hours(24 * 30)
+ec2_settings = EC2.settings()
+ec2_monthly_cost = EC2.get_monthly_cost()
+
+# Calculate cost per scenario
+ec2_cost_scenarios = Enum.map(average_job_durations_ms, fn ajd_ms ->
+    jobs_month = round(ms_month / ajd_ms * ec2_settings.v_cpu)
+
+    %{
+      average_job_duration_ms: ajd_ms,
+      jobs_month: jobs_month,
+      cost: ec2_monthly_cost
+    }
+  end)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %{average_job_duration_ms: 1, cost: 3.02, jobs_month: 5184000000},
+  %{average_job_duration_ms: 2, cost: 3.02, jobs_month: 2592000000},
+  %{average_job_duration_ms: 3, cost: 3.02, jobs_month: 1728000000},
+  %{average_job_duration_ms: 4, cost: 3.02, jobs_month: 1296000000},
+  %{average_job_duration_ms: 5, cost: 3.02, jobs_month: 1036800000},
+  %{average_job_duration_ms: 6, cost: 3.02, jobs_month: 864000000},
+  %{average_job_duration_ms: 7, cost: 3.02, jobs_month: 740571429},
+  %{average_job_duration_ms: 8, cost: 3.02, jobs_month: 648000000},
+  %{average_job_duration_ms: 9, cost: 3.02, jobs_month: 576000000},
+  %{average_job_duration_ms: 10, cost: 3.02, jobs_month: 518400000},
+  %{average_job_duration_ms: 11, cost: 3.02, jobs_month: 471272727},
+  %{average_job_duration_ms: 12, cost: 3.02, jobs_month: 432000000},
+  %{average_job_duration_ms: 13, cost: 3.02, jobs_month: 398769231},
+  %{average_job_duration_ms: 14, cost: 3.02, jobs_month: 370285714},
+  %{average_job_duration_ms: 15, cost: 3.02, jobs_month: 345600000},
+  %{average_job_duration_ms: 16, cost: 3.02, jobs_month: 324000000},
+  %{average_job_duration_ms: 17, cost: 3.02, jobs_month: 304941176},
+  %{average_job_duration_ms: 18, cost: 3.02, jobs_month: 288000000},
+  %{average_job_duration_ms: 19, cost: 3.02, jobs_month: 272842105},
+  %{average_job_duration_ms: 20, cost: 3.02, jobs_month: 259200000},
+  %{average_job_duration_ms: 21, cost: 3.02, jobs_month: 246857143},
+  %{average_job_duration_ms: 22, cost: 3.02, jobs_month: 235636364},
+  %{average_job_duration_ms: 23, cost: 3.02, jobs_month: 225391304},
+  %{average_job_duration_ms: 24, cost: 3.02, jobs_month: 216000000},
+  %{average_job_duration_ms: 25, cost: 3.02, jobs_month: 207360000},
+  %{average_job_duration_ms: 26, cost: 3.02, jobs_month: 199384615},
+  %{average_job_duration_ms: 27, cost: 3.02, jobs_month: 192000000},
+  %{average_job_duration_ms: 28, cost: 3.02, jobs_month: 185142857},
+  %{average_job_duration_ms: 29, cost: 3.02, jobs_month: 178758621},
+  %{average_job_duration_ms: 30, cost: 3.02, jobs_month: 172800000},
+  %{average_job_duration_ms: 31, cost: 3.02, jobs_month: 167225806},
+  %{average_job_duration_ms: 32, cost: 3.02, jobs_month: 162000000},
+  %{average_job_duration_ms: 33, cost: 3.02, jobs_month: 157090909},
+  %{average_job_duration_ms: 34, cost: 3.02, jobs_month: 152470588},
+  %{average_job_duration_ms: 35, cost: 3.02, jobs_month: 148114286},
+  %{average_job_duration_ms: 36, cost: 3.02, jobs_month: 144000000},
+  %{average_job_duration_ms: 37, cost: 3.02, jobs_month: 140108108},
+  %{average_job_duration_ms: 38, cost: 3.02, jobs_month: 136421053},
+  %{average_job_duration_ms: 39, cost: 3.02, jobs_month: 132923077},
+  %{average_job_duration_ms: 40, cost: 3.02, jobs_month: 129600000},
+  %{average_job_duration_ms: 41, cost: 3.02, jobs_month: 126439024},
+  %{average_job_duration_ms: 42, cost: 3.02, jobs_month: 123428571},
+  %{average_job_duration_ms: 43, cost: 3.02, jobs_month: 120558140},
+  %{average_job_duration_ms: 44, cost: 3.02, jobs_month: 117818182},
+  %{average_job_duration_ms: 45, cost: 3.02, jobs_month: 115200000},
+  %{average_job_duration_ms: 46, cost: 3.02, jobs_month: 112695652},
+  %{average_job_duration_ms: 47, cost: 3.02, jobs_month: 110297872},
+  %{average_job_duration_ms: 48, cost: 3.02, ...},
+  %{average_job_duration_ms: 49, ...},
+  %{...},
+  ...
+]
+```
+
+```elixir
+Vl.new(width: 400, height: 400)
+|> Vl.data_from_values(ec2_cost_scenarios)
+|> Vl.encode_field(:x, "average_job_duration_ms",
+    scale: %{type: "log"},
+    axis: [title: "Average Job Durations (ms)"]
+)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:line, color: "blue", tooltip: [content: "data"])
+  |> Vl.encode_field(:y, "jobs_month",
+    aggregate: :average,
+    scale: %{type: "log"},
+    title: "Jobs per Month",
+    axis: [title_color: "blue"]
+  ),
+  Vl.new()
+  |> Vl.mark(:line, color: "green", tooltip: [content: "data"])
+  |> Vl.encode_field(:y, "cost",
+    aggregate: :average,
+    title: "Monthly Cost (USD)",
+    axis: [title_color: "green"]
+  )
+])
+|> Vl.resolve(:scale, y: :independent)
+
+```
+
+The value `3.02 $/month` represents a flat monthly rate for the EC2 instance, which remains constant regardless of how many operations or workloads it performs. In other words, billing is based on provisioned time, not actual usage or workload intensity.
+
+Looking at the graph we can determine that the EC2 instance can support:
+
+* `5,184,000,000 jobs/month` if each job takes `1 ms` to complete or,
+* `5,760 jobs/month` if each job takes `900,000 ms` (15 minutes) to complete.
+* All for the same fixed cost of `3.02 $/month`.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### Lambda Cost
+
+```elixir
+lambda_cost_scenarios = Enum.map(average_job_durations_ms, fn ajd_ms ->
+    jobs_month = round(ms_month / ajd_ms * ec2_settings.v_cpu)
+
+    %{
+      average_job_duration_ms: ajd_ms,
+      jobs_month: jobs_month,
+      cost: Lambda.calculate_monthly_costs(jobs_month, ajd_ms)
+    }
+  end)
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+[
+  %{average_job_duration_ms: 1, cost: 1040.73, jobs_month: 5184000000},
+  %{average_job_duration_ms: 2, cost: 522.33, jobs_month: 2592000000},
+  %{average_job_duration_ms: 3, cost: 349.53, jobs_month: 1728000000},
+  %{average_job_duration_ms: 4, cost: 263.13, jobs_month: 1296000000},
+  %{average_job_duration_ms: 5, cost: 211.29, jobs_month: 1036800000},
+  %{average_job_duration_ms: 6, cost: 176.73, jobs_month: 864000000},
+  %{average_job_duration_ms: 7, cost: 152.05, jobs_month: 740571429},
+  %{average_job_duration_ms: 8, cost: 133.53, jobs_month: 648000000},
+  %{average_job_duration_ms: 9, cost: 119.13, jobs_month: 576000000},
+  %{average_job_duration_ms: 10, cost: 107.61, jobs_month: 518400000},
+  %{average_job_duration_ms: 11, cost: 98.19, jobs_month: 471272727},
+  %{average_job_duration_ms: 12, cost: 90.33, jobs_month: 432000000},
+  %{average_job_duration_ms: 13, cost: 83.69, jobs_month: 398769231},
+  %{average_job_duration_ms: 14, cost: 77.99, jobs_month: 370285714},
+  %{average_job_duration_ms: 15, cost: 73.05, jobs_month: 345600000},
+  %{average_job_duration_ms: 16, cost: 68.73, jobs_month: 324000000},
+  %{average_job_duration_ms: 17, cost: 64.92, jobs_month: 304941176},
+  %{average_job_duration_ms: 18, cost: 61.53, jobs_month: 288000000},
+  %{average_job_duration_ms: 19, cost: 58.5, jobs_month: 272842105},
+  %{average_job_duration_ms: 20, cost: 55.77, jobs_month: 259200000},
+  %{average_job_duration_ms: 21, cost: 53.3, jobs_month: 246857143},
+  %{average_job_duration_ms: 22, cost: 51.06, jobs_month: 235636364},
+  %{average_job_duration_ms: 23, cost: 49.01, jobs_month: 225391304},
+  %{average_job_duration_ms: 24, cost: 47.13, jobs_month: 216000000},
+  %{average_job_duration_ms: 25, cost: 45.41, jobs_month: 207360000},
+  %{average_job_duration_ms: 26, cost: 43.81, jobs_month: 199384615},
+  %{average_job_duration_ms: 27, cost: 42.33, jobs_month: 192000000},
+  %{average_job_duration_ms: 28, cost: 40.96, jobs_month: 185142857},
+  %{average_job_duration_ms: 29, cost: 39.69, jobs_month: 178758621},
+  %{average_job_duration_ms: 30, cost: 38.49, jobs_month: 172800000},
+  %{average_job_duration_ms: 31, cost: 37.38, jobs_month: 167225806},
+  %{average_job_duration_ms: 32, cost: 36.33, jobs_month: 162000000},
+  %{average_job_duration_ms: 33, cost: 35.35, jobs_month: 157090909},
+  %{average_job_duration_ms: 34, cost: 34.43, jobs_month: 152470588},
+  %{average_job_duration_ms: 35, cost: 33.56, jobs_month: 148114286},
+  %{average_job_duration_ms: 36, cost: 32.73, jobs_month: 144000000},
+  %{average_job_duration_ms: 37, cost: 31.95, jobs_month: 140108108},
+  %{average_job_duration_ms: 38, cost: 31.22, jobs_month: 136421053},
+  %{average_job_duration_ms: 39, cost: 30.52, jobs_month: 132923077},
+  %{average_job_duration_ms: 40, cost: 29.85, jobs_month: 129600000},
+  %{average_job_duration_ms: 41, cost: 29.22, jobs_month: 126439024},
+  %{average_job_duration_ms: 42, cost: 28.62, jobs_month: 123428571},
+  %{average_job_duration_ms: 43, cost: 28.04, jobs_month: 120558140},
+  %{average_job_duration_ms: 44, cost: 27.5, jobs_month: 117818182},
+  %{average_job_duration_ms: 45, cost: 26.97, jobs_month: 115200000},
+  %{average_job_duration_ms: 46, cost: 26.47, jobs_month: 112695652},
+  %{average_job_duration_ms: 47, cost: 25.99, jobs_month: 110297872},
+  %{average_job_duration_ms: 48, cost: 25.53, ...},
+  %{average_job_duration_ms: 49, ...},
+  %{...},
+  ...
+]
+```
+
+```elixir
+Vl.new(width: 400, height: 400)
+|> Vl.data_from_values(lambda_cost_scenarios)
+|> Vl.encode_field(:x, "average_job_duration_ms",
+    scale: %{type: "log"},
+    axis: [title: "Average Job Durations (ms)"]
+)
+|> Vl.layers([
+  Vl.new()
+  |> Vl.mark(:line, color: "blue", tooltip: [content: "data"])
+  |> Vl.encode_field(:y, "jobs_month",
+    aggregate: :average,
+    scale: %{type: "log"},
+    title: "Jobs per Month",
+    axis: [title_color: "blue"]
+  ),
+  Vl.new()
+  |> Vl.mark(:line, color: "green", tooltip: [content: "data"])
+  |> Vl.encode_field(:y, "cost",
+    aggregate: :average,
+    title: "Monthly Cost (USD)",
+    axis: [title_color: "green"]
+  )
+])
+|> Vl.resolve(:scale, y: :independent)
+
+```
+
+WIP
+
+## 3. Conclusions
+
+WIP
