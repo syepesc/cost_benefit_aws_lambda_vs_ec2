@@ -1,4 +1,4 @@
-# cost_benefit_aws_lambda_vs_ec2
+# Cost Benefit Analysis between AWS Lambda and EC2
 
 Helps determine when to switch from serverless to virtual machines based on job duration, throughput, and cost efficiency.
 
