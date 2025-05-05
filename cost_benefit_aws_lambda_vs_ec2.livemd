@@ -86,7 +86,7 @@ Where the request price is the number of jobs you request a lambda to execute an
 
 #### Cost Calculation
 
-Assuming that cold starts do not impact performance and that jobs nearing the timeout limit complete without unexpected interruptions, the function `calculate_monthly_costs()` estimates the total monthly cost of running an AWS Lambda function. This calculation is based on two key inputs:
+Assuming that cold starts do not impact performance and that jobs nearing the timeout limit complete without unexpected interruptions, the function `calculate_monthly_costs()` estimates the total monthly cost of running a Lambda function. This calculation is based on two key inputs:
 
 * The total number of job requests per month.
 * The average execution time per job.
@@ -171,7 +171,6 @@ alias VegaLite, as: Vl
 
 ms_month = :timer.hours(24 * 30)
 ec2_settings = EC2.settings()
-ec2_monthly_cost = EC2.get_monthly_cost()
 
 scenarios = Enum.map(average_job_durations_ms, fn ajd_ms ->
     jobs_month = round(ms_month / ajd_ms * ec2_settings.v_cpu)
@@ -235,7 +234,7 @@ From the charts we can tell the following:
 
 ```elixir
 ec2_cost_scenarios = Enum.map(scenarios, fn scenario ->
-    Map.put(scenario, :cost, ec2_monthly_cost)
+    Map.put(scenario, :cost, EC2.get_monthly_cost())
   end)
 ```
 
@@ -264,7 +263,7 @@ Vl.new(width: 400, height: 400, title: "Cost Scenarios (Clipped)")
 |> Vl.resolve(:scale, y: :independent)
 ```
 
-Looking at the charts we can tell the following:
+Looking at the chart we can tell the following:
 
 * The EC2 instance can support `5,184,000,000 jobs/month` when each job takes `1 ms` and `5,760 jobs/month` when each job takes `900,000 ms` (15 minutes) to complete. All for the same fixed cost of `3.02 $/month`. In other words, billing is based on provisioned time, not actual usage or workload intensity.
 
