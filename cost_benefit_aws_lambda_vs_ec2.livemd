@@ -20,13 +20,14 @@ This is our scenario (assumptions):
 * The system is intended to keep running for less than a year.
 * The jobs are critical and cannot be interrupted.
 * We don't know how long in average each job takes to complete.
-* For simplicity, we assume that Lambda and EC2 offer equivalent compute performance, meaning each job takes the same amount of time to complete on either. While this isn't true in practice (as Lambda and EC2 instances have different performance characteristics), it helps streamline our cost-benefit analysis.
 
-The goal is to know which service brings us the best cost-benefit depending on the computation load of our system.
+🏁 The goal is to know which service brings us the best cost-benefit depending on the computation load of our system.
 
 To calculate the cost-benefit we can start by asking the question: How many jobs can the cheapest EC2 instance handle compared to the cost of running the same number of jobs in a Lambda?
 
-Let's break this down.
+If you're also curious about how to compare two services with different performance characteristics, keep reading – we’ll break it down step by step.
+
+Let’s dive in.
 
 ## 1. Setup
 
@@ -42,6 +43,12 @@ average_job_durations_ms = 1..900_000
 
 ### EC2 Setup
 
+#### Rationale
+
+Given our assumptions, the EC2 instance must run continuously, 24 hours a day, 7 days a week, for a period of less than one year. Additionally, since the jobs are critical and may vary in nature – potentially being compute-intensive, memory-intensive, or storage-intensive – we need an instance type that can handle a wide range of workloads efficiently.
+
+To begin our cost comparison, it makes sense to choose a general-purpose instance, as these are versatile and suitable for a variety of tasks. There is no need to overcomplicate the selection at this stage, especially since our primary focus is on price. Currently, the `t4g.nano` instance is the cheapest option that aligns with our requirements.
+
 #### Settings
 
 Region: `us-east-1`, Contract: `on-demand`, Instance Name: `t4g.nano`, Instance Type: `General Purpose`, Operating System: `linux`, Memory: `0.5gb`, vCPU: `2`.
@@ -50,7 +57,7 @@ Region: `us-east-1`, Contract: `on-demand`, Instance Name: `t4g.nano`, Instance 
 
 #### Cost Calculation
 
-Based on our assumptions the EC2 instance need to keep running 24/7 for less than a year, and the jobs are critical. Choosing an on-demand instance is a great start. Now, the monthly cost can be easily calculated using AWS pricing data with the following formula: `monthly_cost = price_per_hour * hours_per_day * days_per_month`.
+The monthly cost can be easily calculated using AWS pricing fee with the following formula: `monthly_cost = price_per_hour * hours_per_day * days_per_month`.
 
 ```elixir
 defmodule EC2 do
@@ -76,9 +83,19 @@ EC2.settings()
 
 #### Lambda Setup
 
+#### Rationale
+
+Unlike EC2, which offers a variety of instance types to choose from, AWS Lambda only provides a single option for running functions. However, there is a key configuration parameter that significantly impacts performance: memory allocation.
+
+According to the [Lambda Memory Configuration](https://docs.aws.amazon.com/lambda/latest/dg/configuration-memory.html) documentation, the number of CPUs assigned to a Lambda function is directly related to the amount of memory configured. Unfortunately, AWS does not provide a clear table specifying how many vCPUs correspond to a given memory allocation.
+
+However, insights from a study focused on [optimizing Lambda cost](https://web.archive.org/web/20220629183438/https://www.sentiatechblog.com/aws-re-invent-2020-day-3-optimizing-lambda-cost-with-multi-threading?utm_source=reddit&utm_medium=social&utm_campaign=day3_lambda) indicate that when the memory is set between 128 MB and 3,008 MB, Lambda functions utilize approximately 2 vCPUs. This is significant because it matches the vCPU count of our chosen EC2 instance, and the memory range (512 MB) also aligns with the configuration of our EC2 instance.
+
+Therefore, based on this analysis, the following setup is recommended:
+
 #### Setup
 
-Region: `us-east-1`, Architecture: `x86`, Memory: `128 mb`, Ephemeral Storage: `512 mb`.
+Region: `us-east-1`, Architecture: `x86`, Memory: `512 mb`, Ephemeral Storage: `512 mb`.
 
 [Price](https://aws.amazon.com/lambda/pricing/): request price: `0.0000002 request`, execution price: `0.0000166667 gb/second`.
 
@@ -102,7 +119,7 @@ defmodule Lambda do
 
   def settings do
     %{
-      memory_mb: 128,
+      memory_mb: 512,
       ephemeral_storage_mb: 512,
       execution_price_gb_sec: 0.0000166667,
       request_price: 0.0000002,
@@ -388,3 +405,7 @@ WIP
 WIP
 
 * Computational Capacity Bound: Since we are simulating a fixed compute resource the maximum job throughput is constrained by job duration and resource count.
+* saving not only 1$ but x%
+* if you need to run ec2 for more time check different savings plan or reserved instances
+* rule of thumb, if the workloads are running cinstantly go for EC2.
+* The execution price of lambda raises after the first 6B GB-sec. However, our EC2 cap is 5.1B so we dont need to worry for such price increase.
