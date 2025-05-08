@@ -12,18 +12,18 @@ Mix.install([
 
 ## Overview
 
-At some point of time you will find yourself asking the question: When should I stop using a serverless compute service and start thinking about a virtual machine in the cloud? - I am using AWS services as example because are the ones I have more familiarity with.
+At some point, you may find yourself asking: When should I stop using a serverless compute service and start considering a virtual machine in the cloud? I am using AWS services as an example because they are the ones I am most familiar with.
 
 This is our scenario (assumptions):
 
-* We have a system that is constantly executing jobs on a daily basis.
-* The system is intended to keep running for less than a year.
+* We have a system that constantly executes jobs on a daily basis. A Job can be a combination of simple calculations, database query, http request, training your AI model, processing payments - you name it.
+* The system is intended to operate for less than a year.
 * The jobs are critical and cannot be interrupted.
-* We don't know how long in average each job takes to complete.
+* We don't know the average duration of each job.
 
-🏁 The goal is to know which service brings us the best cost-benefit depending on the computation load of our system.
+🏁 The goal is to determine which service provides the best cost-benefit based on the computational load of our system.
 
-To calculate the cost-benefit we can start by asking the question: How many jobs can the cheapest EC2 instance handle compared to the cost of running the same number of jobs in a Lambda?
+To calculate the cost-benefit, we can start by asking: How many jobs can the cheapest EC2 instance handle compared to the cost of running the same number of jobs on a similarly configured Lambda?
 
 If you're also curious about how to compare two services with different performance characteristics, keep reading – we’ll break it down step by step.
 
@@ -47,7 +47,7 @@ average_job_durations_ms = 1..900_000
 
 Given our assumptions, the EC2 instance must run continuously, 24 hours a day, 7 days a week, for a period of less than one year. Additionally, since the jobs are critical and may vary in nature – potentially being compute-intensive, memory-intensive, or storage-intensive – we need an instance type that can handle a wide range of workloads efficiently.
 
-To begin our cost comparison, it makes sense to choose a general-purpose instance, as these are versatile and suitable for a variety of tasks. There is no need to overcomplicate the selection at this stage, especially since our primary focus is on price. Currently, the `t4g.nano` instance is the cheapest option that aligns with our requirements.
+To begin our cost comparison, it makes sense to choose a general-purpose instance, as these are versatile and suitable for a variety of tasks. Currently, the `t4g.nano` instance is the cheapest option that aligns with our requirements.
 
 #### Settings
 
@@ -95,7 +95,7 @@ Therefore, based on this analysis, the following setup is recommended:
 
 #### Setup
 
-Region: `us-east-1`, Architecture: `x86`, Memory: `512 mb`, Ephemeral Storage: `512 mb`.
+Region: `us-east-1`, Architecture: `x86`, Memory: `512 mb`, Ephemeral Storage: `512 mb` (default).
 
 [Price](https://aws.amazon.com/lambda/pricing/): request price: `0.0000002 request`, execution price: `0.0000166667 gb/second`.
 
@@ -186,18 +186,19 @@ The cost of executing a given number of jobs, where each job takes a certain ave
 ```elixir
 alias VegaLite, as: Vl
 
+# Milliseconds in a month (24 hours/day * 30 days/month).
 ms_month = :timer.hours(24 * 30)
 ec2_settings = EC2.settings()
 
 scenarios = Enum.map(average_job_durations_ms, fn ajd_ms ->
-    jobs_month = round(ms_month / ajd_ms * ec2_settings.v_cpu)
+  jobs_month = round(ms_month / ajd_ms * ec2_settings.v_cpu)
 
-    %{
-      average_job_duration_ms: ajd_ms,
-      jobs_month: jobs_month,
-      cost: nil
-    }
-  end)
+  %{
+    average_job_duration_ms: ajd_ms,
+    jobs_month: jobs_month,
+    cost: nil
+  }
+end)
 ```
 
 ```elixir
@@ -304,17 +305,17 @@ Vl.new(width: 400, height: 400)
     |> Vl.mark(:line, color: "blue", clip: true, tooltip: [content: "data"])
     |> Vl.encode_field(
       :x, "average_job_duration_ms",
-      scale: [type: "pow", domain: [0, 400000]],
+      scale: [type: "pow"],
       axis: [title: "Average Job Durations (ms)"]
     )
     |> Vl.encode_field(
       :y, "jobs_month",
-      scale: [type: "pow", domain: [0, 1000000]],
+      scale: [type: "pow"],
       title: "Jobs per Month",
       axis: [title_color: "blue"]
     ),
     # Chart 2 costs
-    Vl.new(title: "Cost per Scenario")
+    Vl.new(title: "Cost per Scenario (log scale)")
     |> Vl.mark(:line, color: "green", clip: true, tooltip: [content: "data"])
     |> Vl.encode_field(
       :x, "average_job_duration_ms",
@@ -332,14 +333,26 @@ Vl.new(width: 400, height: 400)
 )
 ```
 
-WIP
+```elixir
+# Expensivest and cheapest scenarios
+{cheapest_scenario, expensivest_scenario} = lambda_cost_scenarios |> Enum.min_max_by(& &1.cost)
+IO.inspect(expensivest_scenario, label: "Expensivest scenario: ")
+IO.inspect(cheapest_scenario, label: "Cheapest scenario: ")
+```
+
+```elixir
+# Possible cheapest scenarios
+lambda_cost_scenarios
+|> Enum.count(fn %{cost: c} -> c == cheapest_scenario.cost end)
+|> IO.inspect(label: "Number of possible cheapest scenarios: ")
+```
 
 Looking at the charts we can tell the following:
 
-* The Lambda can support `5,184,000,000 jobs/month` when each job takes `1 ms` to complete at a price of `1040.73 $/month`
-* The Lambda can support `5,760 jobs/month` when each job takes `900,000 ms` (15 minutes) to complete at a price of `4.13 $/month`.
-* The cost decreas more sensible when there are a lot of sort running jobs.
-* The lowest price `4.13 $/month` can be achieved on different scenarios.
+* When each job has an average duration of `1 ms`, AWS Lambda can handle up to `5,184,000,000 jobs/month`, resulting in a monthly cost of approximately `$1,073.13`.
+* On the opposite end of the spectrum, with jobs averaging `900,000 ms` (or 15 minutes), the system can only support around `5,760 jobs/month`, at a much lower cost of `$36.53`.
+* This illustrates that Lambda’s cost is highly sensitive to the volume of short-duration jobs. As job duration decreases, the number of jobs that can be processed increases dramatically, and cost scales up accordingly.
+* Interestingly, the minimum cost point (i.e., the most cost-efficient configuration) occurs in `799,695` different scenarios, highlighting that many long-running job configurations converge to the same low-cost region, making cost relatively flat in that range.
 
 <!-- livebook:{"break_markdown":true} -->
 
@@ -398,14 +411,24 @@ Vl.new(width: 400, height: 400, title: "EC2 vs Lambda Cost")
 )
 ```
 
-WIP
+Looking at the charts we can tell the following:
+
+* The `anomalous spikes observed between` ~400,000 and ~450,000 jobs/month are attributable to minor floating-point variations in the Lambda cost calculations (e.g., `$36.53` vs. `$36.54`), likely due to rounding artifacts.
+* The Lambda and EC2 cost `curves do not intersect at any point`, indicating that there is no workload range where both services offer identical cost efficiency.
+* The `minimum observed cost delta` between Lambda and EC2 is `$33.51`, calculated as cheapest lambda scenario minus EC2 cost.
 
 ## 3. Final Thoughts
 
-WIP
+Based on the analysis, the choice between AWS Lambda and EC2 primarily hinges on workload characteristics, and system capacity.
 
-* Computational Capacity Bound: Since we are simulating a fixed compute resource the maximum job throughput is constrained by job duration and resource count.
-* saving not only 1$ but x%
-* if you need to run ec2 for more time check different savings plan or reserved instances
-* rule of thumb, if the workloads are running cinstantly go for EC2.
-* The execution price of lambda raises after the first 6B GB-sec. However, our EC2 cap is 5.1B so we dont need to worry for such price increase.
+* **Service Choice Rule of Thumb**: If workloads are continuous or predictable, EC2 generally offers better cost efficiency. In contrast, Lambda is preferable for intermittent or unpredictable workloads where compute time remains within cost-effective limits. Moreover, you can save additional money by leveraging Savings Plans or Reserved Instances in EC2.
+
+* **Computational Capacity Bound**: Since we are simulating a similarly compute capacity for both services, the maximum job throughput is inherently limited by job duration. In practice, this can easily vary depending on the CPU performance, memory, and memory bandwith.
+
+* **Cost Efficiency Consideration**: Savings can be substantial, not just in absolute terms (like ~33.51), but as a percentage of total costs, in our case around ~1200% (3.02/36.56) costs can be saved using EC2 against Lambda.
+
+* **Lambda Pricing Threshold**: The execution price of Lambda increases after the first 6 billion GB-seconds. However, in our current context, this is not a concern, as the EC2 instance capacity (~5.1 billion GB-seconds) is the limiting factor.
+
+* **Scalability Consideration**: If the computational demand exceeds the capacity of the cheapest EC2 instance, it is more practical to scale vertically by selecting a higher-tier EC2 instance rather than continuing to use Lambda.
+
+For most scenarios where jobs are executed continuously and predictably, EC2 emerges as the more economical choice. However, for sporadic or unpredictable workloads with shorter execution times, Lambda remains an attractive option.
