@@ -419,16 +419,14 @@ Looking at the charts we can tell the following:
 
 ## 3. Final Thoughts
 
-Based on the analysis, the choice between AWS Lambda and EC2 primarily hinges on workload characteristics, and system capacity.
+Based on the scenario for the analysis, the choice between AWS Lambda and EC2 primarily hinges on workload characteristics and system capacity.
 
-* **Service Choice Rule of Thumb**: If workloads are continuous or predictable, EC2 generally offers better cost efficiency. In contrast, Lambda is preferable for intermittent or unpredictable workloads where compute time remains within cost-effective limits. Moreover, you can save additional money by leveraging Savings Plans or Reserved Instances in EC2.
+* `Service Choice Rule of Thumb`: Under a high constant workload, the price difference between Lambda and a t2.nano EC2 instance can be significant, with Lambda potentially being more expensive for continuous, long-running tasks. However, if the workload is bursty or short-lived, Lambda could be more cost-effective.
 
-* **Computational Capacity Bound**: Since we are simulating a similarly compute capacity for both services, the maximum job throughput is inherently limited by job duration. In practice, this can easily vary depending on the CPU performance, memory, and memory bandwith.
+* `Computational Capacity Bound`: Since we are simulating a similarly compute capacity for both services, the maximum job throughput is inherently limited by job duration. In practice, this can easily vary depending on the CPU performance, memory, and memory bandwith.
 
-* **Cost Efficiency Consideration**: Savings can be substantial, not just in absolute terms (like ~33.51), but as a percentage of total costs, in our case around ~1200% (3.02/36.56) costs can be saved using EC2 against Lambda.
+* `Cost Efficiency Consideration`: Savings can be substantial, not just in absolute terms (like $33.51), but as a percentage of total costs. In our case around ~1200% ($3.02/$36.56) costs can be saved using EC2 against Lambda.
 
-* **Lambda Pricing Threshold**: The execution price of Lambda increases after the first 6 billion GB-seconds. However, in our current context, this is not a concern, as the EC2 instance capacity (~5.1 billion GB-seconds) is the limiting factor.
+* `Lambda Pricing Threshold`: The execution price of Lambda increases after the first 6 billion GB-seconds. However, in our current context, this is not a concern, as the EC2 instance capacity (~5.1 billion GB-seconds) is the limiting factor.
 
-* **Scalability Consideration**: If the computational demand exceeds the capacity of the cheapest EC2 instance, it is more practical to scale vertically by selecting a higher-tier EC2 instance rather than continuing to use Lambda.
-
-For most scenarios where jobs are executed continuously and predictably, EC2 emerges as the more economical choice. However, for sporadic or unpredictable workloads with shorter execution times, Lambda remains an attractive option.
+* `Scalability Consideration`: If the computational demand exceeds the capacity of the cheapest EC2 instance, it is more practical to scale vertically by selecting a higher-tier EC2 instance or horizontally with auto-scaling groups rather than continuing to use Lambda when your system is under a constinuos workload.
