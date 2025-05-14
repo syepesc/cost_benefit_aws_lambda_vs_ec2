@@ -35,7 +35,7 @@ Let’s dive in.
 
 Based on our assumptions we don't know how long in average each job takes to complete. So, we must define our lower and upper bounds.
 
-Arbitrarily, I will choose `1 ms/job` as lower bound. However, the upper bound must be `900,000 ms/job` (15 minutes) which is the maximum [Lambda timeout](https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html) meaning that a lambda cannot run jobs longer than 15 minutes.
+Arbitrarily, I will choose `1 ms/job` as lower bound. However, the upper bound must be `900,000 ms/job` which is the maximum [Lambda timeout](https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html) meaning that a lambda cannot run jobs longer than 15 minutes.
 
 ```elixir
 average_job_durations_ms = 1..900_000
@@ -425,7 +425,7 @@ Based on the scenario for the analysis, the choice between AWS Lambda and EC2 pr
 
 * `Computational Capacity Bound`: Since we are simulating a similarly compute capacity for both services, the maximum job throughput is inherently limited by job duration. In practice, this can easily vary depending on the CPU performance, memory, and memory bandwith.
 
-* `Cost Efficiency Consideration`: Savings can be substantial, not just in absolute terms (like $33.51), but as a percentage of total costs. In our case around ~1200% ($3.02/$36.56) costs can be saved using EC2 against Lambda.
+* `Cost Efficiency Consideration`: Savings can be substantial, not just in absolute terms (like $33.51), but as a percentage of total costs. In our case EC2 is approximately 91.7% cheaper than Lambda (($36.53 - $3.02)/$36.53). 
 
 * `Lambda Pricing Threshold`: The execution price of Lambda increases after the first 6 billion GB-seconds. However, in our current context, this is not a concern, as the EC2 instance capacity (~5.1 billion GB-seconds) is the limiting factor.
 
